@@ -1,0 +1,233 @@
+---
+title: "NYPD Shooting Incident Analysis"
+author: "Cassandra Jones"
+date: "2025-01-23"
+output: pdf_document
+---
+
+## Methodology
+- Introduction
+- Data Resource
+- Data Visualization
+- Predictive Modeling
+- Potential Bias
+- Conclusion
+
+### Introduction
+In this project, I analyzed a dataset containing shooting incidents that occurred in New York City during the year 2006. The goal was to explore the characteristics of these incidents and create a predictive model to determine whether an incident was a murder. Through my analysis, I examined various factors such as victim demographics, the safety of different precincts, and the distribution of incidents across different boroughs. Additionally, I developed a logistic regression model to predict whether a shooting incident was likely to be a statistical murder. The findings from this project aim to provide insights into patterns within violent incidents in New York City, with a particular focus on identifying potentially unsafe areas and understanding the distribution of incidents across different demographic groups.
+
+
+
+### Data Resource
+
+List of every shooting incident that occurred in NYC going back to 2006 through the end of the previous calendar year. This is a breakdown of every shooting incident that occurred in NYC...
+
+Data Resource: <https://catalog.data.gov/dataset/nypd-shooting-incident-data-historic>
+
+```{r}
+library(tidyverse)
+df <- read.csv("NYPD_Shooting_Incident_Data__Historic_.csv")
+summary(df)
+```
+
+### Data Visualization
+
+Below is a bar plot showing incident counts by victim age group and sex. Interestingly, I found that male victims outnumbered female victims across all age groups, with the 18-24 and 25-44 age groups experiencing the highest number of incidents.
+
+```{r}
+# summarise by age group and sex
+age_group <- df%>%
+  group_by(VIC_AGE_GROUP, VIC_SEX) %>%
+  summarise(incident_count = n(), .groups = "drop")
+
+# exclude unkown rows under both age group and sex columns
+age_group <- age_group %>%
+  filter(!(VIC_AGE_GROUP %in% c("1022", "UNKNOWN"))) %>%
+  filter(!(VIC_SEX %in% c("U")))
+
+ggplot(age_group, aes(x = VIC_AGE_GROUP, y = incident_count, fill = VIC_SEX)) +
+  geom_col(position = "dodge") +  # Position = dodge creates clusters
+  labs(title = "NYC Incident Count by Victim Age Group and Sex",
+       x = "Victim Age Group",
+       y = "Incident Count") +
+  theme_minimal() + 
+  theme(axis.text.x = element_text(hjust = 1))
+```
+
+Below is a box plot to assess precinct safety. By counting incidents by borough and precinct, I calculated the mean number of incidents to be 370.93, with a standard deviation of 374.15. Using the safety threshold of the mean plus one standard deviation, I identified precincts above 745 incidents as potentially unsafe.
+
+
+```{r}
+library(ggplot2)
+safety <- df %>% 
+  group_by(BORO, PRECINCT) %>% 
+  summarise(incident_count=n(), .groups="drop")
+
+mean_incidents <- mean(safety$incident_count)
+sd_incidents <- sd(safety$incident_count)
+min_incident <- min(safety$incident_count)
+max_incident <- max(safety$incident_count)
+threshold <- mean_incidents + sd_incidents
+cat("Incident Counts by BORO by Precinct", "\n")
+cat("minimum: ", min_incident, "\n")
+cat("maximum: ", max_incident, "\n")
+cat("mean: ", mean_incidents, "\n")
+cat("standard deviation: ", sd_incidents, "\n")
+cat("Threshold: ", threshold, "\n")
+
+```
+
+
+```{r}
+ggplot(safety, aes(x = incident_count)) +
+  geom_boxplot() +
+  # Add red dot at threshold
+  geom_point(aes(x = threshold, y = 0), color ="red", size = 4) +  
+  labs(title = "Incident Counts by BORO and Precinct with Threshold in Red",
+       x = "Incident Count",
+       y = "Frequency") +
+  theme_minimal()
+```
+
+
+### Predictive Modeling
+
+Below is a logistic regression model to predict whether an incident was a murder, achieving a training score of 0.8063 and a test score of 0.8062.
+
+```{r}
+library(lubridate)
+# set date and time format
+df$OCCUR_DATE <- mdy(df$OCCUR_DATE)
+df$OCCUR_TIME <- hms(df$OCCUR_TIME)
+
+# create day of week, month, and hour columns
+df$DAY_OF_WEEK <- wday(df$OCCUR_DATE)
+df$MONTH <- month(df$OCCUR_DATE)
+df$HOUR <- hour(df$OCCUR_TIME)
+
+# select useful columns and delete rows with NAs for modeling
+df_model <- df %>% select(BORO, PRECINCT, STATISTICAL_MURDER_FLAG, 
+                          VIC_AGE_GROUP, VIC_RACE, VIC_SEX, Latitude, Longitude, 
+                          MONTH, HOUR, DAY_OF_WEEK)
+df_model <- na.omit(df_model)
+df_model$PRECINCT <- as.factor(df_model$PRECINCT)
+df_model$STATISTICAL_MURDER_FLAG[df_model$STATISTICAL_MURDER_FLAG == "true"] <- 1
+df_model$STATISTICAL_MURDER_FLAG[df_model$STATISTICAL_MURDER_FLAG == "false"] <- 0
+df_model$STATISTICAL_MURDER_FLAG <- as.integer(df_model$STATISTICAL_MURDER_FLAG)
+head(df_model)
+```
+
+
+```{r}
+library(caTools)
+# Set a seed for reproducibility
+set.seed(123)
+
+# Split the data: 70% for training, 30% for testing
+split <- sample.split(df_model$STATISTICAL_MURDER_FLAG, SplitRatio = 0.7)
+
+# Create training and testing datasets
+train_data <- subset(df_model, split == TRUE)
+test_data <- subset(df_model, split == FALSE)
+
+# Set X_train, X_test (features) and y_train, y_test (target variable)
+X_train <- train_data[, c("BORO", "PRECINCT", "VIC_AGE_GROUP", "VIC_RACE", "VIC_SEX", "Latitude", "Longitude", "MONTH", "HOUR", "DAY_OF_WEEK")]
+y_train <- train_data$STATISTICAL_MURDER_FLAG
+
+X_test <- test_data[, c("BORO", "PRECINCT", "VIC_AGE_GROUP", "VIC_RACE", "VIC_SEX", "Latitude", "Longitude", "MONTH", "HOUR", "DAY_OF_WEEK")]
+y_test <- test_data$STATISTICAL_MURDER_FLAG
+```
+
+
+```{r}
+# Create dummy variables for categorical features
+X_train_dummies <- model.matrix(~ BORO + PRECINCT + VIC_AGE_GROUP + VIC_RACE + VIC_SEX - 1, data = X_train)
+X_test_dummies <- model.matrix(~ BORO + PRECINCT + VIC_AGE_GROUP + VIC_RACE + VIC_SEX - 1, data = X_test)
+
+
+# Combine numeric features with dummy variables for both train and test datasets
+X_train_final <- cbind(X_train_dummies, X_train[, c("Latitude", "Longitude", "MONTH", "HOUR", "DAY_OF_WEEK")])
+X_test_final <- cbind(X_test_dummies, X_test[, c("Latitude", "Longitude", "MONTH", "HOUR", "DAY_OF_WEEK")])
+
+# View the final data
+head(X_train_final)
+
+
+```
+
+
+```{r}
+# Combine target and predictors into a single dataframe for modeling
+train_data <- data.frame(X_train_final, STATISTICAL_MURDER_FLAG = y_train)
+
+# Fit the logistic regression model
+model <- glm(STATISTICAL_MURDER_FLAG ~ ., data = train_data, family = binomial)
+
+# View model summary
+summary(model)
+
+# Predict on the test set
+y_pred <- predict(model, newdata = data.frame(X_test_final), type = "response")
+
+# Convert probabilities to binary outcome (0 or 1)
+y_pred_class <- ifelse(y_pred > 0.5, 1, 0)
+
+# Evaluate model performance (confusion matrix)
+table(y_test, y_pred_class)
+
+
+```
+
+
+Check accuracy below
+
+```{r}
+# Predict on the training set
+train_pred_prob <- predict(model, newdata = data.frame(X_train_final), type = "response")
+
+# Convert predicted probabilities to binary outcomes (0 or 1)
+train_pred_class <- ifelse(train_pred_prob > 0.5, 1, 0)
+
+# Calculate accuracy on the training set
+train_accuracy <- mean(train_pred_class == y_train)
+train_accuracy
+
+```
+
+```{r}
+# Predict on the test set
+test_pred_prob <- predict(model, newdata = data.frame(X_test_final), type = "response")
+
+# Convert predicted probabilities to binary outcomes (0 or 1)
+test_pred_class <- ifelse(test_pred_prob > 0.5, 1, 0)
+
+# Calculate accuracy on the test set
+test_accuracy <- mean(test_pred_class == y_test)
+test_accuracy
+```
+
+Below is to visualize model accuracy to compare the train and test scores.
+
+```{r}
+# Plot training vs test accuracy
+accuracy_data <- data.frame(
+  Set = c("Training", "Testing"),
+  Accuracy = c(train_accuracy, test_accuracy)
+)
+
+library(ggplot2)
+ggplot(accuracy_data, aes(x = Set, y = Accuracy, fill = Set)) +
+  geom_bar(stat = "identity", show.legend = FALSE) +
+  ggtitle("Model Accuracy (Training vs Testing)") +
+  ylim(0, 1) +
+  theme_minimal()
+```
+
+### Potential Bias
+
+a key limitation of my analysis is the potential bias in the precinct-level analysis. Since I only considered incident counts without factoring in the population size of each precinct, the results may be skewed.
+
+### Conclusion
+
+To summarize, the analysis of the 2006 shooting incident data revealed interesting patterns, such as the predominance of male victims in all age groups and the higher frequency of incidents among individuals aged 18-44. My assessment of precinct safety, based on incident counts, identified certain areas with higher levels of violence. The predictive model for classifying incidents as murders showed a reasonably strong performance, with an accuracy of approximately 80.6%. However, it's important to recognize the potential bias in the analysis due to the lack of population data for each precinct, which may skew the results. Overall, while this project provides valuable insights, further improvements in model accuracy and a more nuanced understanding of precinct-level safety would require additional data and analysis.
+
